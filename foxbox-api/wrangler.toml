@@ -1,0 +1,26 @@
+name = "foxbox-api"
+main = "src/index.ts"
+compatibility_date = "2026-09-06"
+
+# D1 Database binding (production)
+[[d1_databases]]
+binding = "DB"
+database_name = "foxbox-prod"
+database_id = "194392f6-620b-4feb-814a-064187220960"
+
+# Uncomment and set KV namespace id
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "<YOUR_KV_NAMESPACE_ID>"
+
+# Uncomment and set R2 bucket
+# [[r2_buckets]]
+# binding = "STORAGE"
+# bucket_name = "foxbox-storage"
+
+# Local development overrides
+[env.local]
+[[env.local.d1_databases]]
+binding = "DB"
+database_name = "foxbox-local"
+database_id = "local"

@@ -1,0 +1,25 @@
+{
+  "name": "foxbox-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create foxbox-prod",
+    "db:init:local": "wrangler d1 execute foxbox-prod --local --file=./src/db/schema.sql",
+    "db:seed:local": "wrangler d1 execute foxbox-prod --local --file=./src/db/seeds.sql",
+    "db:init:remote": "wrangler d1 execute foxbox-prod --remote --file=./src/db/schema.sql",
+    "db:seed:remote": "wrangler d1 execute foxbox-prod --remote --file=./src/db/seeds.sql",
+    "db:migrate": "wrangler d1 migrations apply foxbox-prod",
+    "tail": "wrangler tail"
+  },
+  "dependencies": {
+    "hono": "^4.4.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240903.0",
+    "typescript": "^5.5.0",
+    "wrangler": "^3.72.0"
+  }
+}

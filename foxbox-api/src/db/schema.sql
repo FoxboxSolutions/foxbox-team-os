@@ -540,8 +540,19 @@ CREATE TABLE IF NOT EXISTS files (
     tags TEXT NOT NULL DEFAULT '[]',
     product_id TEXT,
     uploaded_by TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    storage_key TEXT,
+    category TEXT NOT NULL DEFAULT 'other',
+    source TEXT NOT NULL DEFAULT 'upload',
+    width INTEGER,
+    height INTEGER,
+    duration_seconds REAL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_files_storage_key ON files(storage_key);
+CREATE INDEX IF NOT EXISTS idx_files_category ON files(category);
+CREATE INDEX IF NOT EXISTS idx_files_uploaded_by ON files(uploaded_by);
 
 -- ============================================
 -- CREATIVES

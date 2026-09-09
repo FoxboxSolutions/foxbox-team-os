@@ -1,4 +1,4 @@
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import {
   FolderOpen,
   File,
@@ -17,10 +17,20 @@ import {
   Tag,
   FileSpreadsheet,
   Presentation,
+  Link2,
+  Check,
+  Loader2,
 } from 'lucide-react'
 import { useAppState } from '@/stores/AppState'
+import { hasPermission } from '@/lib/auth'
+import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import type { FileFolder, VaultFile } from '@/types'
+
+type MediaTab = 'ALL' | 'image' | 'video'
+type UploadState = 'waiting' | 'uploading' | 'done' | 'error'
+
+const SERVER_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm'
 
 const folderConfig: Record<FileFolder, { label: string; icon: typeof FolderOpen; description: string }> = {
   PRODUCTS: { label: 'Products', icon: FolderOpen, description: 'Product images, specs, and assets' },
@@ -80,20 +90,37 @@ type SortField = 'name' | 'createdAt' | 'size'
 type SortDir = 'asc' | 'desc'
 
 export function Files() {
-  const { files, addFile, deleteFile, products, currentUser, addActivityLog, addNotification } = useAppState()
+  const { files, products, currentUser, authUser, addActivityLog, addNotification, refreshFiles, uploadFilesToServer, deleteServerFile } = useAppState()
+  const canManage = !!authUser && hasPermission(authUser.role, 'files:manage')
 
   const [selectedFolder, setSelectedFolder] = useState<FileFolder | 'ALL'>('ALL')
+  const [mediaTab, setMediaTab] = useState<MediaTab>('ALL')
   const [searchQuery, setSearchQuery] = useState('')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid')
   const [sortField, setSortField] = useState<SortField>('createdAt')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
+  const [filesLoading, setFilesLoading] = useState(true)
+  const [filesError, setFilesError] = useState<string | null>(null)
 
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [uploadFolder, setUploadFolder] = useState<FileFolder>('DOCUMENTS')
   const [uploadTags, setUploadTags] = useState('')
   const [uploadProductId, setUploadProductId] = useState<string>('')
-  const [pendingFiles, setPendingFiles] = useState<{ file: File; preview: string }[]>([])
+  const [pendingFiles, setPendingFiles] = useState<{ file: File }[]>([])
   const [isUploading, setIsUploading] = useState(false)
+  const [uploadStatus, setUploadStatus] = useState<Record<number, { pct: number; state: UploadState; error?: string }>>({})
+  const [dragActive, setDragActive] = useState(false)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    setFilesLoading(true)
+    setFilesError(null)
+    refreshFiles()
+      .catch((err) => { if (!cancelled) setFilesError(err instanceof Error ? err.message : 'Failed to load files.') })
+      .finally(() => { if (!cancelled) setFilesLoading(false) })
+    return () => { cancelled = true }
+  }, [refreshFiles])
 
   const [previewFile, setPreviewFile] = useState<VaultFile | null>(null)
 
@@ -106,11 +133,12 @@ export function Files() {
   const filteredFiles = useMemo(() => {
     let result = files.filter(f => {
       const matchesFolder = selectedFolder === 'ALL' || f.folder === selectedFolder
+      const matchesMedia = mediaTab === 'ALL' || (f.category ?? (f.mimeType.startsWith('video/') ? 'video' : f.mimeType.startsWith('image/') ? 'image' : 'other')) === mediaTab
       const matchesSearch = !searchQuery ||
         f.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
         f.originalName.toLowerCase().includes(searchQuery.toLowerCase()) ||
         f.tags.some(t => t.toLowerCase().includes(searchQuery.toLowerCase()))
-      return matchesFolder && matchesSearch
+      return matchesFolder && matchesMedia && matchesSearch
     })
 
     result.sort((a, b) => {
@@ -126,7 +154,7 @@ export function Files() {
     })
 
     return result
-  }, [files, selectedFolder, searchQuery, sortField, sortDir])
+  }, [files, selectedFolder, mediaTab, searchQuery, sortField, sortDir])
 
   const folderCounts = useMemo(() => {
     const counts: Record<string, number> = { ALL: files.length }
@@ -142,26 +170,15 @@ export function Files() {
     fileInputRef.current?.click()
   }
 
+  const addPickedFiles = (list: FileList | File[]) => {
+    const arr = Array.from(list)
+    if (arr.length === 0) return
+    setPendingFiles(prev => [...prev, ...arr.map(file => ({ file }))])
+    setUploadStatus({})
+  }
+
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const inputFiles = e.target.files
-    if (!inputFiles) return
-
-    const newPending: { file: File; preview: string }[] = []
-    let loaded = 0
-
-    for (let i = 0; i < inputFiles.length; i++) {
-      const file = inputFiles[i]
-      const reader = new FileReader()
-      reader.onload = (ev) => {
-        newPending.push({ file, preview: ev.target?.result as string })
-        loaded++
-        if (loaded === inputFiles.length) {
-          setPendingFiles(prev => [...prev, ...newPending])
-        }
-      }
-      reader.readAsDataURL(file)
-    }
-
+    if (e.target.files) addPickedFiles(e.target.files)
     if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
@@ -170,88 +187,108 @@ export function Files() {
   }
 
   const handleUpload = async () => {
-    if (pendingFiles.length === 0) return
+    if (pendingFiles.length === 0 || isUploading) return
 
     setIsUploading(true)
+    setFilesError(null)
     const tags = uploadTags
       .split(',')
       .map(t => t.trim())
       .filter(t => t.length > 0)
+    const initial: Record<number, { pct: number; state: UploadState }> = {}
+    pendingFiles.forEach((_, i) => { initial[i] = { pct: 0, state: 'waiting' } })
+    setUploadStatus(initial)
 
-    for (const pending of pendingFiles) {
-      const vaultFile: VaultFile = {
-        id: `file-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        name: pending.file.name,
-        originalName: pending.file.name,
-        mimeType: pending.file.type || 'application/octet-stream',
-        size: pending.file.size,
-        url: pending.preview,
-        thumbnailUrl: pending.file.type.startsWith('image/') ? pending.preview : undefined,
-        folder: uploadFolder,
-        tags,
-        productId: uploadProductId || undefined,
-        uploadedBy: currentUser?.id || 'unknown',
-        createdAt: new Date(),
-      }
+    const { ok, failed } = await uploadFilesToServer(
+      pendingFiles.map(p => p.file),
+      { folder: uploadFolder, tags, productId: uploadProductId || undefined },
+      (index, pct) => setUploadStatus(prev => ({
+        ...prev,
+        [index]: { pct, state: pct >= 100 ? 'done' : 'uploading' },
+      })),
+    )
 
-      addFile(vaultFile)
-
+    for (const uploaded of ok) {
       addActivityLog({
         id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         userId: currentUser?.id || 'unknown',
         action: 'FILE_UPLOADED',
         entityType: 'FILE',
-        entityId: vaultFile.id,
-        entityName: vaultFile.name,
-        details: `Uploaded "${pending.file.name}" to ${folderConfig[uploadFolder].label}`,
+        entityId: uploaded.id,
+        entityName: uploaded.name,
+        details: `Uploaded "${uploaded.name}" to ${folderConfig[uploadFolder].label}`,
         createdAt: new Date(),
       })
-
       addNotification({
         id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         userId: currentUser?.id || 'unknown',
         title: 'File Uploaded',
-        message: `"${pending.file.name}" was added to ${folderConfig[uploadFolder].label}`,
+        message: `"${uploaded.name}" was added to ${folderConfig[uploadFolder].label}`,
         type: 'GENERAL',
         isRead: false,
         createdAt: new Date(),
       })
     }
 
-    setPendingFiles([])
-    setUploadTags('')
-    setUploadProductId('')
-    setIsUploading(false)
-    setShowUploadModal(false)
-  }
-
-  const handleDownload = (file: VaultFile) => {
-    const link = document.createElement('a')
-    link.href = file.url
-    link.download = file.originalName
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-  }
-
-  const handleDeleteConfirm = () => {
-    if (!deleteConfirmFile) return
-
-    addActivityLog({
-      id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      userId: currentUser?.id || 'unknown',
-      action: 'FILE_UPLOADED',
-      entityType: 'FILE',
-      entityId: deleteConfirmFile.id,
-      entityName: deleteConfirmFile.name,
-      details: `Deleted "${deleteConfirmFile.name}" from ${folderConfig[deleteConfirmFile.folder].label}`,
-      createdAt: new Date(),
+    setUploadStatus(prev => {
+      const next = { ...prev }
+      failed.forEach(f => {
+        const idx = pendingFiles.findIndex(p => p.file.name === f.name)
+        if (idx >= 0) next[idx] = { pct: next[idx]?.pct ?? 0, state: 'error', error: f.error }
+      })
+      return next
     })
 
-    deleteFile(deleteConfirmFile.id)
-    setDeleteConfirmFile(null)
-    if (previewFile?.id === deleteConfirmFile.id) setPreviewFile(null)
-    if (infoFile?.id === deleteConfirmFile.id) setInfoFile(null)
+    setIsUploading(false)
+    if (failed.length === 0) {
+      setPendingFiles([])
+      setUploadStatus({})
+      setUploadTags('')
+      setUploadProductId('')
+      setShowUploadModal(false)
+    }
+  }
+
+  const handleDownload = async (file: VaultFile) => {
+    try {
+      await api.downloadServerFile(file.id, file.originalName || file.name)
+    } catch (err) {
+      setFilesError(err instanceof Error ? err.message : 'Download failed.')
+    }
+  }
+
+  const handleCopyUrl = async (file: VaultFile) => {
+    try {
+      await navigator.clipboard.writeText(api.getFileContentUrl(file.id, true))
+      setCopiedId(file.id)
+      setTimeout(() => setCopiedId(prev => (prev === file.id ? null : prev)), 2000)
+    } catch {
+      setFilesError('Could not copy URL to clipboard.')
+    }
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteConfirmFile) return
+    try {
+      await deleteServerFile(deleteConfirmFile.id)
+
+      addActivityLog({
+        id: `log-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        userId: currentUser?.id || 'unknown',
+        action: 'FILE_UPLOADED',
+        entityType: 'FILE',
+        entityId: deleteConfirmFile.id,
+        entityName: deleteConfirmFile.name,
+        details: `Deleted "${deleteConfirmFile.name}" from ${folderConfig[deleteConfirmFile.folder].label}`,
+        createdAt: new Date(),
+      })
+
+      setDeleteConfirmFile(null)
+      if (previewFile?.id === deleteConfirmFile.id) setPreviewFile(null)
+      if (infoFile?.id === deleteConfirmFile.id) setInfoFile(null)
+    } catch (err) {
+      setFilesError(err instanceof Error ? err.message : 'Delete failed.')
+    }
   }
 
   const toggleSort = (field: SortField) => {
@@ -269,7 +306,7 @@ export function Files() {
         ref={fileInputRef}
         type="file"
         multiple
-        accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.csv,.txt"
+        accept={SERVER_ACCEPT}
         className="hidden"
         onChange={handleFileChange}
       />
@@ -280,17 +317,31 @@ export function Files() {
           <h1 className="text-2xl font-bold text-text-primary">Files & Media Vault</h1>
           <p className="text-sm text-text-muted mt-1">Centralized storage for all team files.</p>
         </div>
-        <button
-          onClick={() => {
-            setUploadFolder(selectedFolder === 'ALL' ? 'DOCUMENTS' : selectedFolder)
-            setShowUploadModal(true)
-          }}
-          className="btn-primary"
-        >
-          <Upload className="w-4 h-4" />
-          Upload File
-        </button>
+        {canManage && (
+          <button
+            onClick={() => {
+              setUploadFolder(selectedFolder === 'ALL' ? 'DOCUMENTS' : selectedFolder)
+              setShowUploadModal(true)
+            }}
+            className="btn-primary"
+          >
+            <Upload className="w-4 h-4" />
+            Upload File
+          </button>
+        )}
       </div>
+
+      {filesError && (
+        <div className="p-3 rounded-xl bg-danger/10 border border-danger/20 flex items-center justify-between gap-3">
+          <p className="text-sm text-danger">{filesError}</p>
+          <button
+            onClick={() => { setFilesError(null); setFilesLoading(true); refreshFiles().catch((err) => setFilesError(err instanceof Error ? err.message : 'Failed to load files.')).finally(() => setFilesLoading(false)) }}
+            className="btn-secondary text-xs py-1.5 flex-shrink-0"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       {/* Search + Sort + View Toggle */}
       <div className="flex items-center gap-4">
@@ -348,6 +399,28 @@ export function Files() {
         </div>
       </div>
 
+      {/* Media Type Tabs */}
+      <div className="flex gap-2 flex-wrap">
+        {([
+          { value: 'ALL', label: 'All Files' },
+          { value: 'image', label: 'Images' },
+          { value: 'video', label: 'Videos' },
+        ] as { value: MediaTab; label: string }[]).map((t) => (
+          <button
+            key={t.value}
+            onClick={() => setMediaTab(t.value)}
+            className={cn(
+              'px-3 py-1.5 rounded-lg text-xs font-medium transition-all flex items-center gap-1.5',
+              mediaTab === t.value ? 'bg-gold text-black border border-gold' : 'bg-white/[0.03] text-text-muted border border-border hover:border-border-light'
+            )}
+          >
+            {t.value === 'image' && <Image className="w-3 h-3" />}
+            {t.value === 'video' && <Video className="w-3 h-3" />}
+            {t.label}
+          </button>
+        ))}
+      </div>
+
       {/* Folder Tabs */}
       <div className="flex gap-2 flex-wrap">
         <button
@@ -388,7 +461,12 @@ export function Files() {
       </div>
 
       {/* Files Grid/List */}
-      {filteredFiles.length === 0 ? (
+      {filesLoading ? (
+        <div className="empty-state">
+          <Loader2 className="w-6 h-6 animate-spin text-gold mx-auto mb-3" />
+          <p className="text-sm text-text-muted">Loading files...</p>
+        </div>
+      ) : filteredFiles.length === 0 ? (
         <div className="empty-state">
           <div className="empty-state-icon">
             <FolderOpen className="w-6 h-6" />
@@ -401,7 +479,7 @@ export function Files() {
                 : `No files in ${folderConfig[selectedFolder].label} yet.`
             }
           </p>
-          {!searchQuery && (
+          {!searchQuery && canManage && (
             <button
               onClick={() => {
                 setUploadFolder(selectedFolder === 'ALL' ? 'DOCUMENTS' : selectedFolder)
@@ -425,12 +503,27 @@ export function Files() {
                   className="w-full aspect-[4/3] rounded-lg bg-white/[0.03] border border-border flex items-center justify-center mb-3 overflow-hidden"
                   onClick={() => setPreviewFile(file)}
                 >
-                  {file.thumbnailUrl || file.mimeType.startsWith('image/') ? (
+                  {file.mimeType.startsWith('image/') ? (
                     <img
-                      src={file.thumbnailUrl || file.url}
+                      src={api.getFileContentUrl(file.id, true)}
                       alt={file.name}
                       className="w-full h-full object-cover"
+                      loading="lazy"
                     />
+                  ) : file.mimeType.startsWith('video/') ? (
+                    <div className="relative w-full h-full">
+                      <video
+                        src={api.getFileContentUrl(file.id, true)}
+                        preload="metadata"
+                        muted
+                        playsInline
+                        className="w-full h-full object-cover"
+                      />
+                      <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 bg-black/30 pointer-events-none">
+                        <Video className="w-6 h-6 text-white" />
+                        <span className="text-[10px] text-white font-medium">▶ VIDEO</span>
+                      </div>
+                    </div>
                   ) : (
                     <div className="flex flex-col items-center gap-2">
                       <Icon className="w-8 h-8 text-text-muted" />
@@ -472,19 +565,28 @@ export function Files() {
                     <Download className="w-3.5 h-3.5" />
                   </button>
                   <button
+                    onClick={(e) => { e.stopPropagation(); handleCopyUrl(file) }}
+                    className="p-1.5 rounded bg-white/[0.05] text-text-muted hover:text-gold transition-colors"
+                    title="Copy URL"
+                  >
+                    {copiedId === file.id ? <Check className="w-3.5 h-3.5 text-success" /> : <Link2 className="w-3.5 h-3.5" />}
+                  </button>
+                  <button
                     onClick={(e) => { e.stopPropagation(); setInfoFile(file) }}
                     className="p-1.5 rounded bg-white/[0.05] text-text-muted hover:text-gold transition-colors"
                     title="Info"
                   >
                     <FileText className="w-3.5 h-3.5" />
                   </button>
-                  <button
-                    onClick={(e) => { e.stopPropagation(); setDeleteConfirmFile(file) }}
-                    className="p-1.5 rounded bg-white/[0.05] text-text-muted hover:text-danger transition-colors"
-                    title="Delete"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  {canManage && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setDeleteConfirmFile(file) }}
+                      className="p-1.5 rounded bg-white/[0.05] text-text-muted hover:text-danger transition-colors"
+                      title="Delete"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             )
@@ -530,11 +632,12 @@ export function Files() {
                     <td>
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-lg bg-white/[0.03] border border-border flex items-center justify-center overflow-hidden flex-shrink-0">
-                          {file.thumbnailUrl || file.mimeType.startsWith('image/') ? (
+                          {file.mimeType.startsWith('image/') ? (
                             <img
-                              src={file.thumbnailUrl || file.url}
+                              src={api.getFileContentUrl(file.id, true)}
                               alt=""
                               className="w-full h-full object-cover"
+                              loading="lazy"
                             />
                           ) : (
                             <Icon className="w-4 h-4 text-text-muted" />
@@ -598,19 +701,28 @@ export function Files() {
                           <Download className="w-3.5 h-3.5" />
                         </button>
                         <button
+                          onClick={() => handleCopyUrl(file)}
+                          className="p-1.5 rounded hover:bg-white/[0.05] text-text-muted hover:text-gold transition-colors"
+                          title="Copy URL"
+                        >
+                          {copiedId === file.id ? <Check className="w-3.5 h-3.5 text-success" /> : <Link2 className="w-3.5 h-3.5" />}
+                        </button>
+                        <button
                           onClick={() => setInfoFile(file)}
                           className="p-1.5 rounded hover:bg-white/[0.05] text-text-muted hover:text-gold transition-colors"
                           title="Info"
                         >
                           <FileText className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          onClick={() => setDeleteConfirmFile(file)}
-                          className="p-1.5 rounded hover:bg-white/[0.05] text-text-muted hover:text-danger transition-colors"
-                          title="Delete"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {canManage && (
+                          <button
+                            onClick={() => setDeleteConfirmFile(file)}
+                            className="p-1.5 rounded hover:bg-white/[0.05] text-text-muted hover:text-danger transition-colors"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -639,40 +751,60 @@ export function Files() {
               {/* Drop zone / select */}
               <div
                 onClick={handleFileInputClick}
-                className="border-2 border-dashed border-border rounded-xl p-8 text-center cursor-pointer hover:border-gold/30 hover:bg-gold/[0.02] transition-all"
+                onDragOver={(e) => { e.preventDefault(); setDragActive(true) }}
+                onDragLeave={() => setDragActive(false)}
+                onDrop={(e) => { e.preventDefault(); setDragActive(false); if (e.dataTransfer.files) addPickedFiles(e.dataTransfer.files) }}
+                className={cn(
+                  'border-2 border-dashed rounded-xl p-8 text-center cursor-pointer transition-all',
+                  dragActive ? 'border-gold/60 bg-gold/[0.05]' : 'border-border hover:border-gold/30 hover:bg-gold/[0.02]'
+                )}
               >
                 <Upload className="w-8 h-8 text-text-muted mx-auto mb-3" />
-                <p className="text-sm text-text-secondary mb-1">Click to select files</p>
-                <p className="text-xs text-text-muted">Images, videos, PDFs, documents, spreadsheets</p>
+                <p className="text-sm text-text-secondary mb-1">Click to select or drag & drop files</p>
+                <p className="text-xs text-text-muted">Images (JPEG, PNG, WEBP, GIF) and videos (MP4, MOV, WEBM) — max 100 MB each</p>
               </div>
 
               {/* Pending files list */}
               {pendingFiles.length > 0 && (
-                <div className="space-y-2 max-h-40 overflow-y-auto">
-                  {pendingFiles.map((pending, idx) => (
-                    <div key={idx} className="flex items-center gap-3 p-2 rounded-lg bg-white/[0.03] border border-border">
-                      {pending.file.type.startsWith('image/') ? (
-                        <img src={pending.preview} alt="" className="w-10 h-10 rounded object-cover" />
-                      ) : (
-                        <div className="w-10 h-10 rounded bg-white/[0.05] flex items-center justify-center">
-                          {(() => {
-                            const PIcon = mimeToIcon(pending.file.type)
-                            return <PIcon className="w-5 h-5 text-text-muted" />
-                          })()}
+                <div className="space-y-2 max-h-48 overflow-y-auto">
+                  {pendingFiles.map((pending, idx) => {
+                    const st = uploadStatus[idx]
+                    const PIcon = mimeToIcon(pending.file.type)
+                    return (
+                      <div key={idx} className="p-2 rounded-lg bg-white/[0.03] border border-border">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded bg-white/[0.05] flex items-center justify-center flex-shrink-0">
+                            <PIcon className="w-5 h-5 text-text-muted" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm text-text-primary truncate">{pending.file.name}</p>
+                            <p className="text-[11px] text-text-muted">
+                              {formatFileSize(pending.file.size)}
+                              {st?.state === 'uploading' && ` · ${st.pct}%`}
+                              {st?.state === 'done' && ' · ✓'}
+                              {st?.state === 'error' && <span className="text-danger"> · {st.error || 'Failed'}</span>}
+                            </p>
+                          </div>
+                          {!isUploading && (
+                            <button
+                              onClick={() => removePendingFile(idx)}
+                              className="p-1 rounded hover:bg-white/[0.05] text-text-muted hover:text-danger transition-colors"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                         </div>
-                      )}
-                      <div className="flex-1 min-w-0">
-                        <p className="text-sm text-text-primary truncate">{pending.file.name}</p>
-                        <p className="text-[11px] text-text-muted">{formatFileSize(pending.file.size)}</p>
+                        {st && (st.state === 'uploading' || st.state === 'done') && (
+                          <div className="mt-2 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                            <div
+                              className={cn('h-full rounded-full transition-all', st.state === 'done' ? 'bg-success' : 'bg-gold')}
+                              style={{ width: `${st.state === 'done' ? 100 : st.pct}%` }}
+                            />
+                          </div>
+                        )}
                       </div>
-                      <button
-                        onClick={() => removePendingFile(idx)}
-                        className="p-1 rounded hover:bg-white/[0.05] text-text-muted hover:text-danger transition-colors"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
 
@@ -783,19 +915,20 @@ export function Files() {
             <div className="flex-1 overflow-auto p-6 flex items-center justify-center min-h-[300px]">
               {previewFile.mimeType.startsWith('image/') ? (
                 <img
-                  src={previewFile.url}
+                  src={api.getFileContentUrl(previewFile.id, true)}
                   alt={previewFile.name}
                   className="max-w-full max-h-[60vh] object-contain rounded-lg"
                 />
               ) : previewFile.mimeType.startsWith('video/') ? (
                 <video
-                  src={previewFile.url}
+                  src={api.getFileContentUrl(previewFile.id, true)}
                   controls
+                  preload="metadata"
                   className="max-w-full max-h-[60vh] rounded-lg"
                 />
               ) : previewFile.mimeType === 'application/pdf' ? (
                 <iframe
-                  src={previewFile.url}
+                  src={api.getFileContentUrl(previewFile.id, true)}
                   className="w-full h-[60vh] rounded-lg border border-border"
                   title={previewFile.name}
                 />
@@ -834,8 +967,8 @@ export function Files() {
             <div className="p-5 space-y-4">
               {/* Preview */}
               <div className="w-full aspect-video rounded-xl bg-white/[0.03] border border-border overflow-hidden flex items-center justify-center">
-                {infoFile.thumbnailUrl || infoFile.mimeType.startsWith('image/') ? (
-                  <img src={infoFile.thumbnailUrl || infoFile.url} alt="" className="w-full h-full object-cover" />
+                {infoFile.mimeType.startsWith('image/') ? (
+                  <img src={api.getFileContentUrl(infoFile.id, true)} alt="" className="w-full h-full object-cover" />
                 ) : (
                   <div className="flex flex-col items-center gap-2">
                     {(() => {
@@ -899,13 +1032,15 @@ export function Files() {
             </div>
 
             <div className="flex items-center justify-end gap-3 p-5 border-t border-border">
-              <button
-                onClick={() => { setInfoFile(null); setDeleteConfirmFile(infoFile) }}
-                className="btn-secondary text-danger hover:text-danger"
-              >
-                <Trash2 className="w-4 h-4" />
-                Delete
-              </button>
+              {canManage && (
+                <button
+                  onClick={() => { setInfoFile(null); setDeleteConfirmFile(infoFile) }}
+                  className="btn-secondary text-danger hover:text-danger"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </button>
+              )}
               <button onClick={() => setInfoFile(null)} className="btn-primary">
                 Close
               </button>

@@ -226,7 +226,7 @@ export default function YouCanOrdersPage() {
   const buildPushPreview = (order: YouCanOrder): Record<string, string> => {
     const items = order.orderItems || []
     const productName = items.length > 0 ? items[0].productName : ''
-    const productRef = items.length > 0 ? (items[0].sku || items[0].ref || '') : ''
+    const productRef = items.length > 0 ? (items[0].sku || '') : ''
     const totalToCollect = order.totalToCollect || order.total + order.deliveryFee
 
     let ecomAddress = order.address || ''

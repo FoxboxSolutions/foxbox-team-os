@@ -10,7 +10,7 @@ import {
 import { useAppState } from '@/stores/AppState'
 import { cn } from '@/lib/utils'
 import { api } from '@/lib/api'
-import type { DiscussionMessage } from '@/types'
+import type { DiscussionChannel, DiscussionMessage } from '@/types'
 
 function formatMessageTime(date: Date): string {
   const now = new Date()
@@ -33,11 +33,13 @@ function formatMessageTime(date: Date): string {
 export function Discussions() {
   const {
     addMessage: addLocalMessage,
-    markChannelRead,
     users,
     currentUser,
-    addNotification,
   } = useAppState()
+
+  // API data
+  const [channels, setChannels] = useState<DiscussionChannel[]>([])
+  const [messages, setMessages] = useState<DiscussionMessage[]>([])
 
   const [selectedChannel, setSelectedChannel] = useState(channels[0]?.id || '')
   const [newMessage, setNewMessage] = useState('')
@@ -46,10 +48,6 @@ export function Discussions() {
   const [showMentionDropdown, setShowMentionDropdown] = useState(false)
   const [mentionFilter, setMentionFilter] = useState('')
   const [mentionStartIndex, setMentionStartIndex] = useState(-1)
-
-  // API data
-  const [channels, setChannels] = useState<DiscussionChannel[]>([])
-  const [messages, setMessages] = useState<DiscussionMessage[]>([])
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -218,7 +216,7 @@ export function Discussions() {
     // Save to API
     ;(async () => {
       try {
-        const result = await api.createMessage(selectedChannel, {
+        await api.createMessage(selectedChannel, {
           content: newMessage.trim(),
           mentions,
           repliesTo: replyTo?.id,

@@ -2,17 +2,15 @@ import { useState, useMemo, useCallback, useRef, useEffect } from 'react'
 import {
   Search, Plus, Package, Edit3, Trash2, Eye,
   X, AlertTriangle, ShoppingBag, DollarSign, Archive, Power, PowerOff,
+  TrendingUp,
 } from 'lucide-react'
 import { useAppState } from '@/stores/AppState'
 import type { SellingProduct, SellingProductStatus } from '@/types'
 import { cn } from '@/lib/utils'
+import { calculateDashboardFinancials, calculateProductFinancials, formatDzd, formatPercent } from '@/lib/financials'
 
 // ─── Helpers ───────────────────────────────────────────────────
 const generateId = () => Date.now().toString(36) + Math.random().toString(36).substring(2, 10)
-
-function formatDzd(amount: number): string {
-  return amount.toLocaleString('fr-DZ') + ' DA'
-}
 
 function formatDate(d: Date | string | undefined): string {
   if (!d) return '-'
@@ -49,7 +47,7 @@ const INITIAL_FORM: FormData = {
 export default function ProductSelling() {
   const {
     sellingProducts, addSellingProduct, updateSellingProduct, deleteSellingProduct,
-    orders, products, currentUser, addActivityLog,
+    orders, products, expenses, currentUser, addActivityLog,
   } = useAppState()
 
   const [search, setSearch] = useState('')
@@ -69,23 +67,22 @@ export default function ProductSelling() {
     toastTimerRef.current = setTimeout(() => setToast(null), 3000)
   }, [])
 
-  // ─── Compute product stats from orders ─────────────────────────
-  const productStats = useMemo(() => {
-    const stats: Record<string, { totalOrders: number; confirmed: number; delivered: number; returned: number; revenue: number }> = {}
-    orders.forEach(o => {
-      if (!stats[o.productId]) {
-        stats[o.productId] = { totalOrders: 0, confirmed: 0, delivered: 0, returned: 0, revenue: 0 }
-      }
-      const s = stats[o.productId]
-      s.totalOrders++
-      if (o.status === 'CONFIRMED' || o.status === 'DELIVERED' || o.status === 'RETURNED') s.confirmed++
-      if (o.status === 'DELIVERED') { s.delivered++; s.revenue += o.sellingPriceDzd }
-      if (o.status === 'RETURNED') s.returned++
-    })
-    return stats
-  }, [orders])
+  // ─── Dashboard Financials (centralized) ────────────────────
+  const dashFinancials = useMemo(
+    () => calculateDashboardFinancials(sellingProducts, orders, expenses),
+    [sellingProducts, orders, expenses],
+  )
 
-  // ─── Filtered products ─────────────────────────────────────────
+  // ─── Per-product financials ─────────────────────────────────
+  const productFinancialsMap = useMemo(() => {
+    const map: Record<string, ReturnType<typeof calculateProductFinancials>> = {}
+    sellingProducts.forEach(p => {
+      map[p.id] = calculateProductFinancials(p, orders, expenses)
+    })
+    return map
+  }, [sellingProducts, orders, expenses])
+
+  // ─── Filtered products ─────────────────────────────────────
   const filtered = useMemo(() => {
     let list = [...sellingProducts]
     if (statusFilter !== 'ALL') list = list.filter(p => p.status === statusFilter)
@@ -101,23 +98,14 @@ export default function ProductSelling() {
     return list.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
   }, [sellingProducts, statusFilter, search])
 
-  // ─── KPIs ──────────────────────────────────────────────────────
-  const kpis = useMemo(() => {
-    const active = sellingProducts.filter(p => p.status === 'ACTIVE').length
-    const inactive = sellingProducts.filter(p => p.status === 'INACTIVE').length
-    const totalStock = sellingProducts.reduce((s, p) => s + p.stock, 0)
-    const totalRevenue = Object.values(productStats).reduce((s, ps) => s + ps.revenue, 0)
-    return { active, inactive, totalStock, totalRevenue, total: sellingProducts.length }
-  }, [sellingProducts, productStats])
-
-  // ─── Open create modal ─────────────────────────────────────────
+  // ─── Open create modal ─────────────────────────────────────
   const openCreate = useCallback(() => {
     setEditingId(null)
     setForm(INITIAL_FORM)
     setShowModal(true)
   }, [])
 
-  // ─── Open edit modal ──────────────────────────────────────────
+  // ─── Open edit modal ──────────────────────────────────────
   const openEdit = useCallback((p: SellingProduct) => {
     setEditingId(p.id)
     setForm({
@@ -139,7 +127,7 @@ export default function ProductSelling() {
     setShowModal(true)
   }, [])
 
-  // ─── Save product ──────────────────────────────────────────────
+  // ─── Save product ──────────────────────────────────────────
   const handleSave = useCallback(() => {
     if (!form.name.trim() || !form.sku.trim()) {
       showToast('Name and SKU are required', 'error')
@@ -212,7 +200,7 @@ export default function ProductSelling() {
     setForm(INITIAL_FORM)
   }, [form, editingId, sellingProducts, addSellingProduct, updateSellingProduct, addActivityLog, currentUser, showToast])
 
-  // ─── Toggle status ─────────────────────────────────────────────
+  // ─── Toggle status ─────────────────────────────────────────
   const toggleStatus = useCallback((p: SellingProduct) => {
     const newStatus: SellingProductStatus = p.status === 'ACTIVE' ? 'INACTIVE' : 'ACTIVE'
     const updated: SellingProduct = { ...p, status: newStatus, updatedAt: new Date() }
@@ -220,7 +208,7 @@ export default function ProductSelling() {
     showToast(`Product ${newStatus === 'ACTIVE' ? 'activated' : 'deactivated'}`)
   }, [updateSellingProduct, showToast])
 
-  // ─── Delete product ────────────────────────────────────────────
+  // ─── Delete product ────────────────────────────────────────
   const handleDelete = useCallback((id: string) => {
     const p = sellingProducts.find(sp => sp.id === id)
     deleteSellingProduct(id)
@@ -239,14 +227,14 @@ export default function ProductSelling() {
     })
   }, [sellingProducts, deleteSellingProduct, detailId, addActivityLog, currentUser, showToast])
 
-  // ─── Detail product ────────────────────────────────────────────
+  // ─── Detail product ────────────────────────────────────────
   const detailProduct = useMemo(() =>
     sellingProducts.find(p => p.id === detailId) || null,
   [sellingProducts, detailId])
 
-  const detailStats = useMemo(() =>
-    detailId ? productStats[detailId] || { totalOrders: 0, confirmed: 0, delivered: 0, returned: 0, revenue: 0 } : null,
-  [detailId, productStats])
+  const detailFinancials = useMemo(() =>
+    detailId ? productFinancialsMap[detailId] || null : null,
+  [detailId, productFinancialsMap])
 
   const relatedOrders = useMemo(() =>
     detailId ? orders.filter(o => o.productId === detailId).slice(0, 20) : [],
@@ -254,7 +242,7 @@ export default function ProductSelling() {
 
   const getProduct = useCallback((id: string) => products.find(p => p.id === id), [products])
 
-  // ─── Keyboard shortcut ─────────────────────────────────────────
+  // ─── Keyboard shortcut ─────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -267,13 +255,7 @@ export default function ProductSelling() {
     return () => window.removeEventListener('keydown', handler)
   }, [showModal, detailId, deleteConfirmId])
 
-  // ─── Margin calc ──────────────────────────────────────────────
-  const getMargin = (p: SellingProduct) => {
-    if (!p.sellingPriceDzd) return 0
-    return ((p.sellingPriceDzd - p.costPriceDzd) / p.sellingPriceDzd * 100)
-  }
-
-  // ─── Render ────────────────────────────────────────────────────
+  // ─── Render ────────────────────────────────────────────────
   return (
     <div className="space-y-6">
       {/* Toast */}
@@ -298,14 +280,14 @@ export default function ProductSelling() {
         </button>
       </div>
 
-      {/* KPIs */}
+      {/* KPIs — Using centralized financial calculations */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {[
-          { label: 'Total', value: kpis.total, icon: Package, color: 'text-text-primary' },
-          { label: 'Active', value: kpis.active, icon: Power, color: 'text-green' },
-          { label: 'Inactive', value: kpis.inactive, icon: PowerOff, color: 'text-text-muted' },
-          { label: 'Total Stock', value: kpis.totalStock, icon: Archive, color: 'text-blue' },
-          { label: 'Revenue', value: formatDzd(kpis.totalRevenue), icon: DollarSign, color: 'text-gold' },
+          { label: 'Total Products', value: dashFinancials.totalProducts, icon: Package, color: 'text-text-primary' },
+          { label: 'Active', value: dashFinancials.activeProducts, icon: Power, color: 'text-green' },
+          { label: 'Total Stock', value: dashFinancials.totalStock, icon: Archive, color: 'text-blue' },
+          { label: 'Revenue (Delivered)', value: formatDzd(dashFinancials.totalRevenue), icon: DollarSign, color: 'text-gold' },
+          { label: 'Gross Profit', value: formatDzd(dashFinancials.totalGrossProfit), icon: TrendingUp, color: dashFinancials.totalGrossProfit >= 0 ? 'text-green' : 'text-danger' },
         ].map(k => (
           <div key={k.label} className="glass-card p-4 flex items-center gap-3">
             <div className="p-2 rounded-lg bg-white/[0.03]">
@@ -315,6 +297,28 @@ export default function ProductSelling() {
               <p className="text-xs text-text-muted">{k.label}</p>
               <p className={cn('text-lg font-semibold', k.color)}>{k.value}</p>
             </div>
+          </div>
+        ))}
+      </div>
+
+      {/* Secondary KPIs — COGS + Net Profit */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        {[
+          { label: 'COGS (Cost of Goods Sold)', value: formatDzd(dashFinancials.totalCOGS) },
+          { label: 'Operating Costs', value: formatDzd(dashFinancials.totalOperatingCosts) },
+          { label: 'Net Profit', value: formatDzd(dashFinancials.totalNetProfit), highlight: true },
+          { label: 'Gross Margin', value: formatPercent(dashFinancials.grossMarginPercent) },
+        ].map(k => (
+          <div key={k.label} className="glass-card p-4">
+            <p className="text-xs text-text-muted">{k.label}</p>
+            <p className={cn(
+              'text-lg font-semibold mt-1',
+              k.highlight
+                ? (dashFinancials.totalNetProfit >= 0 ? 'text-green' : 'text-danger')
+                : 'text-text-primary'
+            )}>
+              {k.value}
+            </p>
           </div>
         ))}
       </div>
@@ -378,15 +382,15 @@ export default function ProductSelling() {
                   <th className="text-right px-4 py-3 text-xs font-medium text-text-muted">Cost</th>
                   <th className="text-right px-4 py-3 text-xs font-medium text-text-muted">Margin</th>
                   <th className="text-right px-4 py-3 text-xs font-medium text-text-muted">Stock</th>
-                  <th className="text-center px-4 py-3 text-xs font-medium text-text-muted">Orders</th>
+                  <th className="text-center px-4 py-3 text-xs font-medium text-text-muted">Revenue</th>
                   <th className="text-center px-4 py-3 text-xs font-medium text-text-muted">Status</th>
                   <th className="text-right px-4 py-3 text-xs font-medium text-text-muted">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {filtered.map(p => {
-                  const stats = productStats[p.id]
-                  const margin = getMargin(p)
+                  const fin = productFinancialsMap[p.id]
+                  const margin = fin ? (fin.sellingPricePerUnit > 0 ? ((fin.sellingPricePerUnit - fin.purchaseCostPerUnit) / fin.sellingPricePerUnit * 100) : 0) : 0
                   return (
                     <tr key={p.id} className="border-b border-border/50 hover:bg-white/[0.02] transition-colors">
                       <td className="px-4 py-3">
@@ -424,7 +428,7 @@ export default function ProductSelling() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-center">
-                        <span className="text-sm text-text-primary">{stats?.totalOrders || 0}</span>
+                        <span className="text-sm text-gold font-medium">{formatDzd(fin?.actualRevenue || 0)}</span>
                       </td>
                       <td className="px-4 py-3 text-center">
                         <span className={cn(
@@ -517,7 +521,7 @@ export default function ProductSelling() {
               {/* Cost Price */}
               <div>
                 <label className="text-xs text-text-muted mb-1 block">Cost Price (DA)</label>
-                <input type="number" value={form.costPriceDzd} onChange={e => setForm(f => ({ ...f, costPriceDzd: e.target.value }))} className="input-field w-full" placeholder="1500" />
+                <input type="number" value={form.costPriceDzd} onChange={e => setForm(f => ({ ...f, costPriceDzd: e.target.value }))} className="input-field w-full" placeholder="2760" />
               </div>
               {/* Stock */}
               <div>
@@ -591,7 +595,7 @@ export default function ProductSelling() {
       )}
 
       {/* ─── Detail Drawer ──────────────────────────────────────── */}
-      {detailProduct && (
+      {detailProduct && detailFinancials && (
         <div className="fixed inset-0 z-50 flex justify-end">
           <div className="absolute inset-0 bg-black/40" onClick={() => setDetailId(null)} />
           <div className="relative w-full max-w-lg bg-charcoal border-l border-border overflow-y-auto">
@@ -629,68 +633,110 @@ export default function ProductSelling() {
                 </div>
               </section>
 
-              {/* Pricing */}
+              {/* Financial Summary — Using centralized calculations */}
               <section>
-                <h3 className="text-xs font-medium text-text-muted uppercase tracking-wider mb-3">Pricing</h3>
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="p-3 rounded-xl bg-white/[0.02] text-center">
-                    <p className="text-xs text-text-muted">Selling</p>
-                    <p className="text-sm font-semibold text-gold">{formatDzd(detailProduct.sellingPriceDzd)}</p>
+                <h3 className="text-xs font-medium text-text-muted uppercase tracking-wider mb-3">Financial Summary</h3>
+                <div className="space-y-2">
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Purchase Cost / Unit</span>
+                    <span className="text-sm text-text-primary">{formatDzd(detailFinancials.purchaseCostPerUnit)}</span>
                   </div>
-                  <div className="p-3 rounded-xl bg-white/[0.02] text-center">
-                    <p className="text-xs text-text-muted">Cost</p>
-                    <p className="text-sm font-semibold text-text-primary">{formatDzd(detailProduct.costPriceDzd)}</p>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Selling Price / Unit</span>
+                    <span className="text-sm text-gold font-semibold">{formatDzd(detailFinancials.sellingPricePerUnit)}</span>
                   </div>
-                  <div className="p-3 rounded-xl bg-white/[0.02] text-center">
-                    <p className="text-xs text-text-muted">Margin</p>
-                    <p className={cn('text-sm font-semibold', getMargin(detailProduct) > 0 ? 'text-green' : 'text-danger')}>
-                      {getMargin(detailProduct).toFixed(1)}%
-                    </p>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Gross Profit / Unit</span>
+                    <span className={cn('text-sm font-medium', detailFinancials.grossProfitPerUnit >= 0 ? 'text-green' : 'text-danger')}>
+                      {formatDzd(detailFinancials.grossProfitPerUnit)}
+                    </span>
                   </div>
+                  <div className="border-t border-border my-2" />
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Units Purchased</span>
+                    <span className="text-sm text-text-primary">{detailFinancials.unitsPurchased}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Units Sold (Delivered)</span>
+                    <span className="text-sm text-text-primary">{detailFinancials.unitsSold}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Units Remaining</span>
+                    <span className="text-sm text-text-primary">{detailFinancials.unitsRemaining}</span>
+                  </div>
+                  <div className="border-t border-border my-2" />
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Total Purchase Cost</span>
+                    <span className="text-sm text-text-primary">{formatDzd(detailFinancials.totalPurchaseCost)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Actual Revenue</span>
+                    <span className="text-sm text-gold font-semibold">{formatDzd(detailFinancials.actualRevenue)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">COGS</span>
+                    <span className="text-sm text-text-primary">{formatDzd(detailFinancials.actualCOGS)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Gross Profit</span>
+                    <span className={cn('text-sm font-semibold', detailFinancials.grossProfit >= 0 ? 'text-green' : 'text-danger')}>
+                      {formatDzd(detailFinancials.grossProfit)}
+                    </span>
+                  </div>
+                  {detailFinancials.hasOperatingCosts && (
+                    <>
+                      <div className="border-t border-border my-2" />
+                      <div className="flex justify-between">
+                        <span className="text-sm text-text-muted">Advertising Cost</span>
+                        <span className="text-sm text-text-primary">{formatDzd(detailFinancials.advertisingCost)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-text-muted">Packaging Cost</span>
+                        <span className="text-sm text-text-primary">{formatDzd(detailFinancials.packagingCost)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-text-muted">Confirmation Cost</span>
+                        <span className="text-sm text-text-primary">{formatDzd(detailFinancials.confirmationCost)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-text-muted">Other Costs</span>
+                        <span className="text-sm text-text-primary">{formatDzd(detailFinancials.otherCosts)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-text-muted">Total Operating Costs</span>
+                        <span className="text-sm text-text-primary font-medium">{formatDzd(detailFinancials.totalOperatingCosts)}</span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-text-muted">Net Profit</span>
+                        <span className={cn('text-sm font-semibold', detailFinancials.netProfit >= 0 ? 'text-green' : 'text-danger')}>
+                          {formatDzd(detailFinancials.netProfit)}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  {!detailFinancials.hasOperatingCosts && (
+                    <p className="text-xs text-text-muted italic mt-2">Operating costs not recorded yet</p>
+                  )}
+                  <div className="border-t border-border my-2" />
+                  <div className="flex justify-between">
+                    <span className="text-sm text-text-muted">Gross Margin</span>
+                    <span className="text-sm text-text-primary font-medium">{formatPercent(detailFinancials.grossMarginPercent)}</span>
+                  </div>
+                  {detailFinancials.hasOperatingCosts && (
+                    <div className="flex justify-between">
+                      <span className="text-sm text-text-muted">Net Margin</span>
+                      <span className="text-sm text-text-primary font-medium">{formatPercent(detailFinancials.netMarginPercent)}</span>
+                    </div>
+                  )}
+                  <div className="border-t border-border my-2" />
+                  <p className="text-xs text-text-muted">
+                    Potential Revenue (all units): {formatDzd(detailFinancials.potentialRevenue)}
+                  </p>
+                  <p className="text-xs text-text-muted">
+                    Potential Gross Profit: {formatDzd(detailFinancials.potentialGrossProfit)}
+                  </p>
                 </div>
               </section>
-
-              {/* Stock */}
-              <section>
-                <h3 className="text-xs font-medium text-text-muted uppercase tracking-wider mb-3">Stock</h3>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 rounded-xl bg-white/[0.02] text-center">
-                    <p className="text-xs text-text-muted">Total</p>
-                    <p className="text-sm font-semibold text-text-primary">{detailProduct.stock}</p>
-                  </div>
-                  <div className="p-3 rounded-xl bg-white/[0.02] text-center">
-                    <p className="text-xs text-text-muted">Available</p>
-                    <p className={cn('text-sm font-semibold', detailProduct.availableStock <= 0 ? 'text-danger' : 'text-green')}>
-                      {detailProduct.availableStock}
-                    </p>
-                  </div>
-                </div>
-              </section>
-
-              {/* Sales */}
-              {detailStats && (
-                <section>
-                  <h3 className="text-xs font-medium text-text-muted uppercase tracking-wider mb-3">Sales</h3>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="p-3 rounded-xl bg-white/[0.02] text-center">
-                      <p className="text-xs text-text-muted">Orders</p>
-                      <p className="text-sm font-semibold text-text-primary">{detailStats.totalOrders}</p>
-                    </div>
-                    <div className="p-3 rounded-xl bg-white/[0.02] text-center">
-                      <p className="text-xs text-text-muted">Delivered</p>
-                      <p className="text-sm font-semibold text-green">{detailStats.delivered}</p>
-                    </div>
-                    <div className="p-3 rounded-xl bg-white/[0.02] text-center">
-                      <p className="text-xs text-text-muted">Returned</p>
-                      <p className="text-sm font-semibold text-danger">{detailStats.returned}</p>
-                    </div>
-                    <div className="p-3 rounded-xl bg-white/[0.02] text-center">
-                      <p className="text-xs text-text-muted">Revenue</p>
-                      <p className="text-sm font-semibold text-gold">{formatDzd(detailStats.revenue)}</p>
-                    </div>
-                  </div>
-                </section>
-              )}
 
               {/* Notes */}
               {detailProduct.notes && (
@@ -771,7 +817,7 @@ export default function ProductSelling() {
                 <h3 className="text-lg font-heading font-semibold text-text-primary">Delete Product</h3>
               </div>
               <p className="text-sm text-text-muted mb-6">
-                Are you sure you want to delete <strong className="text-text-primary">"{p?.name}"</strong>?
+                Are you sure you want to delete <strong className="text-text-primary">"{p?.name}"</strong> from Selling Products?
                 This action cannot be undone.
               </p>
               <div className="flex justify-end gap-2">

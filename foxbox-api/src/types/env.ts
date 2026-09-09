@@ -2,6 +2,8 @@ export interface Env {
   DB: D1Database;
   CACHE?: KVNamespace;
   STORAGE?: R2Bucket;
+  R2_BUCKET: R2Bucket;
+  FILES_MAX_BYTES?: string;
   ENVIRONMENT: string;
   JWT_SECRET: string;
   ENCRYPTION_KEY?: string;

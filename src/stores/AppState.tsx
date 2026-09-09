@@ -94,6 +94,13 @@ interface AppState {
   files: VaultFile[]
   addFile: (f: VaultFile) => void
   deleteFile: (id: string) => void
+  refreshFiles: () => Promise<void>
+  uploadFilesToServer: (
+    items: File[],
+    meta: { folder?: string; tags?: string[]; productId?: string },
+    onItemProgress?: (index: number, pct: number) => void,
+  ) => Promise<{ ok: VaultFile[]; failed: { name: string; error: string }[] }>
+  deleteServerFile: (id: string) => Promise<void>
 
   // Creatives
   creatives: Creative[]
@@ -199,20 +206,20 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const [authLoading, setAuthLoading] = useState(false)
   const [authError, setAuthError] = useState<string | null>(null)
   const [authUsers, setAuthUsers] = useState<AuthUser[]>(() => db.getAuthUsers())
-  const [registrationRequests, setRegistrationRequests] = useState<RegistrationRequest[]>(() => db.getRegistrationRequests())
+  const [registrationRequests, _setRegistrationRequests] = useState<RegistrationRequest[]>(() => db.getRegistrationRequests())
 
   const [products, setProducts] = useState<Product[]>(() => db.getProducts())
   const [sellingProducts, setSellingProducts] = useState<SellingProduct[]>(() => db.getSellingProducts())
   const [tasks, setTasks] = useState<Task[]>(() => db.getTasks())
   const [posts, setPosts] = useState<Post[]>(() => db.getPosts())
-  const [channels] = useState<DiscussionChannel[]>(() => db.getChannels())
+  const [channels, setChannels] = useState<DiscussionChannel[]>(() => db.getChannels())
   const [messages, setMessages] = useState<DiscussionMessage[]>(() => db.getMessages())
   const [files, setFiles] = useState<VaultFile[]>(() => db.getFiles())
   const [creatives, setCreatives] = useState<Creative[]>(() => db.getCreatives())
   const [orders, setOrders] = useState<Order[]>(() => db.getOrders())
   const [deliveryProviders, setDeliveryProviders] = useState<DeliveryProvider[]>(() => db.getDeliveryProviders())
   const [shipments, setShipments] = useState<Shipment[]>(() => db.getShipments())
-  const [wilayas] = useState<Wilaya[]>(() => db.getWilayas())
+  const [wilayas, setWilayas] = useState<Wilaya[]>(() => db.getWilayas())
   const [expenses, setExpenses] = useState<Expense[]>(() => db.getExpenses())
   const [revenues, setRevenues] = useState<Revenue[]>(() => db.getRevenues())
   const [notifications, setNotifications] = useState<Notification[]>(() => db.getNotifications())
@@ -253,15 +260,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const loadMessages = useCallback(async (channelId?: string) => {
-    if (!channelId) return
-    try {
-      const msgs = await api.getMessages(channelId)
-      setMessages(msgs)
-    } catch (err) {
-      console.error('Failed to load messages:', err)
-    }
-  }, [])
+  // Messages are loaded per-channel via addMessage / handleGoogleCallback
 
   const loadTasks = useCallback(async () => {
     try {
@@ -378,10 +377,6 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     } catch (err) {
       console.error('Failed to load activity log:', err)
     }
-  }, [])
-
-  const loadSettings = useCallback(async () => {
-    // Settings loaded on demand
   }, [])
 
   const loadAllData = useCallback(async () => {
@@ -549,7 +544,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const handleGoogleCallback = useCallback(async (token: string, userId: string, status: string): Promise<{ success: boolean; redirect?: string; error?: string }> => {
+  const handleGoogleCallback = useCallback(async (token: string, userId: string, _status: string): Promise<{ success: boolean; redirect?: string; error?: string }> => {
     // Store the JWT token from the Worker
     localStorage.setItem('foxbox_worker_token', token)
     localStorage.setItem('foxbox_worker_user_id', userId)
@@ -954,7 +949,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  // Files
+  // Files (local compat; server is source of truth — see refreshFiles)
   const addFile = useCallback((f: VaultFile) => {
     db.saveFile(f)
     setFiles(db.getFiles())
@@ -962,6 +957,41 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   const deleteFile = useCallback((id: string) => {
     db.deleteFile(id)
     setFiles(db.getFiles())
+  }, [])
+
+  // Files (R2-backed)
+  const refreshFiles = useCallback(async () => {
+    const { files: serverFiles } = await api.getFiles({ limit: 100 })
+    setFiles(serverFiles)
+    // Keep a warm local cache for global search etc.
+    for (const f of serverFiles) db.saveFile(f)
+  }, [])
+
+  const uploadFilesToServer = useCallback(async (
+    items: File[],
+    meta: { folder?: string; tags?: string[]; productId?: string },
+    onItemProgress?: (index: number, pct: number) => void,
+  ) => {
+    const ok: VaultFile[] = []
+    const failed: { name: string; error: string }[] = []
+    for (let i = 0; i < items.length; i++) {
+      try {
+        const uploaded = await api.uploadFile(items[i], meta, (pct) => onItemProgress?.(i, pct))
+        ok.push(uploaded)
+        db.saveFile(uploaded)
+      } catch (err) {
+        failed.push({ name: items[i].name, error: err instanceof Error ? err.message : 'Upload failed' })
+      }
+    }
+    setFiles(db.getFiles())
+    await refreshFiles().catch(() => {})
+    return { ok, failed }
+  }, [refreshFiles])
+
+  const deleteServerFile = useCallback(async (id: string) => {
+    await api.deleteServerFile(id)
+    db.deleteFile(id)
+    setFiles((prev) => prev.filter((f) => f.id !== id))
   }, [])
 
   // Creatives
@@ -1264,7 +1294,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       tasks, addTask, updateTask, deleteTask, addTaskComment, addTaskActivity,
       posts, addPost, updatePost, deletePost,
       channels, messages, addMessage, markChannelRead,
-      files, addFile, deleteFile,
+      files, addFile, deleteFile, refreshFiles, uploadFilesToServer, deleteServerFile,
       creatives, addCreative, updateCreative, deleteCreative,
       orders, addOrder, updateOrder, deleteOrder,
       deliveryProviders, addDeliveryProvider, updateDeliveryProvider, deleteDeliveryProvider,

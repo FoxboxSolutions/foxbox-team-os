@@ -1,14 +1,14 @@
 import type {
-  AuthUser, AuthRole, RegistrationRequest,
+  AuthUser, AuthRole, VaultFile,
   DiscussionChannel, DiscussionMessage,
-  Task, TaskComment, TaskActivity,
+  Task,
   Post, Product, SellingProduct,
   Order, DeliveryProvider, Shipment,
   Wilaya, Expense, Revenue,
-  Notification, ActivityLog, Confirmation,
-  EcomDelivery, DeliveryHistoryEntry,
-  YouCanOrder, YouCanConnection, YouCanWebhookLog,
-  YouCanOrdersKpis, Creative, User
+  Notification, Confirmation,
+  EcomDelivery,
+  YouCanOrder, YouCanOrdersKpis, Creative,
+  ActivityLog,
 } from '@/types';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'https://foxbox-api.foxboxsolutions01.workers.dev/api';
@@ -27,6 +27,27 @@ async function handleResponse<T>(res: Response): Promise<T> {
     throw new Error(data.error || `HTTP ${res.status}`);
   }
   return data.data ?? data;
+}
+
+// Backend file rows are camelCase; normalize defensively for UI safety.
+function normalizeServerFile(r: Record<string, unknown>): VaultFile {
+  const tags = Array.isArray(r.tags) ? (r.tags as unknown[]).filter((t): t is string => typeof t === 'string') : [];
+  return {
+    id: String(r.id ?? ''),
+    name: String(r.name ?? r.originalName ?? 'file'),
+    originalName: String(r.originalName ?? r.name ?? 'file'),
+    mimeType: String(r.mimeType ?? 'application/octet-stream'),
+    size: Number(r.size ?? 0),
+    url: String(r.url ?? ''),
+    thumbnailUrl: (r.thumbnailUrl as string | undefined) ?? undefined,
+    folder: (r.folder as VaultFile['folder']) ?? 'DOCUMENTS',
+    tags,
+    productId: (r.productId as string | undefined) ?? undefined,
+    uploadedBy: String(r.uploadedBy ?? 'unknown'),
+    createdAt: r.createdAt ? new Date(r.createdAt as string) : new Date(),
+    category: (r.category as VaultFile['category']) ?? undefined,
+    source: (r.source as VaultFile['source']) ?? undefined,
+  };
 }
 
 // Backend historically returned snake_case (full_name, created_at...).
@@ -658,12 +679,99 @@ export const api = {
     return handleResponse(res);
   },
 
-  // ─── FILES ─────────────────────────────────────────────────
-  async getFiles() {
-    const res = await fetch(`${API_BASE}/files`, {
+  // ─── FILES (R2-backed) ─────────────────────────────────────
+  async getFiles(params?: { search?: string; category?: string; folder?: string; limit?: number; offset?: number }) {
+    const qs = new URLSearchParams();
+    if (params?.search) qs.set('search', params.search);
+    if (params?.category) qs.set('category', params.category);
+    if (params?.folder) qs.set('folder', params.folder);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const query = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await fetch(`${API_BASE}/files${query}`, {
       headers: getAuthHeaders(),
     });
-    return handleResponse<Array<{ id: string; name: string; original_name: string; mime_type: string; size: number; url: string; thumbnail_url: string; folder: string; tags: string[]; product_id: string; uploaded_by: string; created_at: string }>>(res);
+    const data = await handleResponse<{ files: Record<string, unknown>[]; total: number }>(res);
+    const rows = Array.isArray(data.files) ? data.files : [];
+    return { files: rows.map(normalizeServerFile), total: data.total ?? rows.length };
+  },
+
+  async getServerFile(id: string) {
+    const res = await fetch(`${API_BASE}/files/${id}`, {
+      headers: getAuthHeaders(),
+    });
+    const data = await handleResponse<Record<string, unknown>>(res);
+    return normalizeServerFile(data);
+  },
+
+  // Multipart upload with progress (fetch has no upload progress, hence XHR).
+  uploadFile(
+    file: File,
+    meta: { folder?: string; tags?: string[]; productId?: string },
+    onProgress?: (pct: number) => void,
+  ): Promise<VaultFile> {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${API_BASE}/files`);
+      const token = getAuthToken();
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) onProgress?.(Math.round((e.loaded / e.total) * 100));
+      };
+      xhr.onload = () => {
+        let data: { success?: boolean; data?: Record<string, unknown>[]; error?: string } = {};
+        try { data = JSON.parse(xhr.responseText); } catch { /* keep empty */ }
+        if (xhr.status >= 200 && xhr.status < 300 && data.success && Array.isArray(data.data) && data.data[0]) {
+          onProgress?.(100);
+          resolve(normalizeServerFile(data.data[0]));
+        } else {
+          reject(new Error(data.error || `Upload failed: HTTP ${xhr.status}`));
+        }
+      };
+      xhr.onerror = () => reject(new Error('Upload failed: network error'));
+      xhr.onabort = () => reject(new Error('Upload cancelled'));
+      const fd = new FormData();
+      fd.append('file', file, file.name);
+      if (meta.folder) fd.append('folder', meta.folder);
+      if (meta.tags && meta.tags.length) fd.append('tags', JSON.stringify(meta.tags));
+      if (meta.productId) fd.append('productId', meta.productId);
+      xhr.send(fd);
+    });
+  },
+
+  async deleteServerFile(id: string) {
+    const res = await fetch(`${API_BASE}/files/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  // Private R2 access: content URL. withToken embeds the JWT so <img>/<video>
+  // tags (which can't send Authorization headers) can load. Token stays in-session.
+  getFileContentUrl(id: string, withToken = false) {
+    const token = withToken ? getAuthToken() : null;
+    return `${API_BASE}/files/${id}/content${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+  },
+
+  // Authenticated blob download (preserves original filename).
+  async downloadServerFile(id: string, filename: string) {
+    const res = await fetch(`${API_BASE}/files/${id}/content`, {
+      headers: getAuthHeaders(),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Download failed: HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
   },
 
   // ─── CREATIVES ─────────────────────────────────────────────
@@ -714,6 +822,14 @@ export const api = {
       headers: getAuthHeaders(),
     });
     return handleResponse(res);
+  },
+
+  // ─── ACTIVITY LOG ──────────────────────────────────────────
+  async getActivityLog() {
+    const res = await fetch(`${API_BASE}/activity-log`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<ActivityLog[]>(res);
   },
 
   // ─── SETTINGS ──────────────────────────────────────────────

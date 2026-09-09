@@ -13,10 +13,10 @@ database_id = "194392f6-620b-4feb-814a-064187220960"
 # binding = "CACHE"
 # id = "<YOUR_KV_NAMESPACE_ID>"
 
-# Uncomment and set R2 bucket
-# [[r2_buckets]]
-# binding = "STORAGE"
-# bucket_name = "foxbox-storage"
+# R2 bucket binding (production) — reuses existing foxbox-images bucket for team media
+[[r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "foxbox-images"
 
 # Local development overrides
 [env.local]

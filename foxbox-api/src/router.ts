@@ -9,9 +9,11 @@ import youcanRoutes from './routes/youcan';
 import webhookRoutes from './routes/webhooks';
 import orderRoutes from './routes/orders';
 import productRoutes from './routes/products';
+import sellingProductRoutes from './routes/selling-products';
 import confirmationRoutes from './routes/confirmations';
 import teamRoutes from './routes/team';
 import financeRoutes from './routes/finance';
+import filesRoutes from './routes/files';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -54,9 +56,11 @@ app.route('/api', youcanRoutes);
 app.route('/api', webhookRoutes);
 app.route('/api/orders', orderRoutes);
 app.route('/api/products', productRoutes);
+app.route('/api/selling-products', sellingProductRoutes);
 app.route('/api/confirmations', confirmationRoutes);
 app.route('/api', teamRoutes);
 app.route('/api', financeRoutes);
+app.route('/api', filesRoutes);
 
 // ─── 404 Fallback ───────────────────────────────────────────
 

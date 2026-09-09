@@ -397,6 +397,9 @@ export interface Task {
 
 export type FileFolder = 'PRODUCTS' | 'CREATIVES' | 'VIDEOS' | 'IMAGES' | 'SUPPLIERS' | 'DOCUMENTS' | 'MARKETING' | 'OPERATIONS'
 
+export type FileCategory = 'image' | 'video' | 'document' | 'audio' | 'other'
+export type FileSource = 'upload' | 'generated'
+
 export interface VaultFile {
   id: string
   name: string
@@ -410,6 +413,9 @@ export interface VaultFile {
   productId?: string
   uploadedBy: string
   createdAt: Date
+  // R2-backed metadata (present for server files; reserved for future AI pipeline)
+  category?: FileCategory
+  source?: FileSource
 }
 
 // --- Creative Lab ---

@@ -23,6 +23,7 @@ import {
   Wallet,
   FileText,
   Wand2,
+  Building2,
 } from 'lucide-react'
 import { useAppState } from '@/stores/AppState'
 import { cn } from '@/lib/utils'
@@ -85,6 +86,7 @@ const navSections: NavSection[] = [
       { path: '/app/orders', label: 'Orders', icon: ShoppingCart },
       { path: '/app/confirmation', label: 'Confirmation via Message', icon: MessageSquareCheck },
       { path: '/app/delivery', label: 'Delivery', icon: Truck },
+      { path: '/app/delivery-companies', label: 'Delivery Companies', icon: Building2 },
       { path: '/app/finance', label: 'Finance', icon: DollarSign },
     ],
   },
@@ -161,7 +163,7 @@ export function Sidebar() {
               {section.items.map((item) => {
                 const isActive = item.path === '/app'
                   ? location.pathname === '/app'
-                  : location.pathname.startsWith(item.path)
+                  : location.pathname === item.path || location.pathname.startsWith(item.path + '/')
 
                 const badgeCount = item.path === '/app/tasks' ? pendingTasks
                   : item.path === '/app/discussions' ? unreadNotifications

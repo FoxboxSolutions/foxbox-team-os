@@ -20,6 +20,7 @@ import { VideoImagesCreation } from '@/pages/app/VideoImages'
 import { CODCenter } from '@/pages/app/CODCenter'
 import { Orders } from '@/pages/app/Orders'
 import { Delivery } from '@/pages/app/Delivery'
+import { DeliveryCompanies } from '@/pages/app/DeliveryCompanies'
 import { Finance } from '@/pages/app/Finance'
 import { Analytics } from '@/pages/app/Analytics'
 import { Winners } from '@/pages/app/Winners'
@@ -88,6 +89,7 @@ function App() {
             <Route path="orders" element={<Orders />} />
             <Route path="confirmation" element={<ConfirmationMessages />} />
             <Route path="delivery" element={<Delivery />} />
+            <Route path="delivery-companies" element={<DeliveryCompanies />} />
             <Route path="finance" element={<Finance />} />
             <Route path="analytics" element={<Analytics />} />
             <Route path="settings" element={<Settings />} />

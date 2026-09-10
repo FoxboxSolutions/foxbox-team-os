@@ -14,6 +14,9 @@ import confirmationRoutes from './routes/confirmations';
 import teamRoutes from './routes/team';
 import financeRoutes from './routes/finance';
 import filesRoutes from './routes/files';
+import membersRoutes from './routes/members';
+import landingPagesRoutes from './routes/landing-pages';
+import deliveryIntegrationsRoutes from './routes/delivery-integrations';
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -61,6 +64,9 @@ app.route('/api/confirmations', confirmationRoutes);
 app.route('/api', teamRoutes);
 app.route('/api', financeRoutes);
 app.route('/api', filesRoutes);
+app.route('/api', membersRoutes);
+app.route('/api', landingPagesRoutes);
+app.route('/api', deliveryIntegrationsRoutes);
 
 // ─── 404 Fallback ───────────────────────────────────────────
 

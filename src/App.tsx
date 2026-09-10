@@ -15,6 +15,8 @@ import { Tasks } from '@/pages/app/Tasks'
 import { Files } from '@/pages/app/Files'
 import { Discussions } from '@/pages/app/Discussions'
 import { CreativeLab } from '@/pages/app/CreativeLab'
+import { LandingPageBuilder } from '@/pages/app/LandingPage'
+import { VideoImagesCreation } from '@/pages/app/VideoImages'
 import { CODCenter } from '@/pages/app/CODCenter'
 import { Orders } from '@/pages/app/Orders'
 import { Delivery } from '@/pages/app/Delivery'
@@ -26,6 +28,8 @@ import ProductSelling from '@/pages/app/ProductSelling'
 import YouCanOrdersPage from '@/pages/app/YouCanOrders'
 import { Profile } from '@/pages/app/Profile'
 import { TeamManagement } from '@/pages/app/TeamManagement'
+import { Commissions } from '@/pages/app/Commissions'
+import { InviteAcceptPage } from '@/pages/auth/InviteAccept'
 import { LoginPage } from '@/pages/auth/Login'
 import { RegisterPage } from '@/pages/auth/Register'
 import { ForgotPasswordPage } from '@/pages/auth/ForgotPassword'
@@ -50,6 +54,9 @@ function App() {
           <Route path="/auth/complete-profile" element={<CompleteProfilePage />} />
         </Route>
 
+        {/* Public invitation acceptance */}
+        <Route path="/team/invite/:token" element={<InviteAcceptPage />} />
+
         {/* Status Pages */}
         <Route path="/pending-approval" element={<PendingApprovalPage />} />
         <Route path="/account-rejected" element={<AccountRejectedPage />} />
@@ -71,8 +78,11 @@ function App() {
             <Route path="team" element={<TeamHub />} />
             <Route path="tasks" element={<Tasks />} />
             <Route path="files" element={<Files />} />
+            <Route path="commissions" element={<Commissions />} />
             <Route path="discussions" element={<Discussions />} />
             <Route path="creative" element={<CreativeLab />} />
+            <Route path="landing-pages" element={<LandingPageBuilder />} />
+            <Route path="video-images" element={<VideoImagesCreation />} />
             <Route path="cod" element={<CODCenter />} />
             <Route path="youcan-orders" element={<YouCanOrdersPage />} />
             <Route path="orders" element={<Orders />} />

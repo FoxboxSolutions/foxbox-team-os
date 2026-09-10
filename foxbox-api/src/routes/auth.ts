@@ -8,8 +8,8 @@ import { authenticate } from '../middleware/auth';
 
 const auth = new Hono<{ Bindings: Env }>();
 
-// Hash password using Web Crypto (PBKDF2)
-async function hashPassword(password: string): Promise<string> {
+// Hash password using Web Crypto (PBKDF2) — exported for invitation acceptance
+export async function hashPassword(password: string): Promise<string> {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const keyMaterial = await crypto.subtle.importKey(
     'raw',
@@ -727,6 +727,7 @@ auth.get('/google/callback', async (c) => {
       [googleEmail.toLowerCase()]
     );
 
+    let justCreatedUser = false;
     if (user) {
       console.log('[GOOGLE_EXISTING_USER_FOUND] user_id=' + user.id + ' status=' + user.status + ' role=' + user.role);
       // CASE 2 & 3: Email exists or Google already linked
@@ -795,6 +796,30 @@ auth.get('/google/callback', async (c) => {
       );
 
       user = { id: userId, status, role, full_name: googleName, avatar: googlePicture || null };
+      justCreatedUser = true;
+    }
+
+    // 5b. Invitation linking (single auth system: a valid invite determines
+    // the role for new/unapproved users; active members keep their role).
+    const pendingInvite = await queryOne<{ id: string; role: string; invited_by: string; expires_at: string }>(c.env,
+      `SELECT id, role, invited_by, expires_at FROM team_invitations WHERE email = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1`,
+      [googleEmail.toLowerCase()]
+    );
+    if (pendingInvite && new Date(pendingInvite.expires_at).getTime() >= Date.now()) {
+      const inviteNow = new Date().toISOString();
+      if (justCreatedUser || user!.status === 'needs_role') {
+        const inviteRole = pendingInvite.role === 'administrator' ? 'administrator' : 'confirmator';
+        await execute(c.env,
+          `UPDATE auth_users SET role = ?, requested_role = ?, status = 'approved', approved_at = ?, approved_by = ?, updated_at = ? WHERE id = ?`,
+          [inviteRole, inviteRole, inviteNow, pendingInvite.invited_by, inviteNow, user!.id]
+        );
+        user!.role = inviteRole;
+        user!.status = 'approved';
+      }
+      await execute(c.env,
+        `UPDATE team_invitations SET status = 'accepted', accepted_at = ?, accepted_user_id = ?, updated_at = ? WHERE id = ?`,
+        [inviteNow, user!.id, inviteNow, pendingInvite.id]
+      );
     }
 
     // 6. If user needs to select role, redirect to complete-profile page

@@ -20,6 +20,9 @@ import {
   ShoppingBag,
   Store,
   Shield,
+  Wallet,
+  FileText,
+  Wand2,
 } from 'lucide-react'
 import { useAppState } from '@/stores/AppState'
 import { cn } from '@/lib/utils'
@@ -62,6 +65,7 @@ const navSections: NavSection[] = [
       { path: '/app/team', label: 'Team Hub', icon: Users },
       { path: '/app/tasks', label: 'Tasks', icon: CheckSquare },
       { path: '/app/files', label: 'Files', icon: FolderOpen },
+      { path: '/app/commissions', label: 'Commissions', icon: Wallet },
       { path: '/app/discussions', label: 'Discussions', icon: MessageSquare },
     ],
   },
@@ -69,6 +73,8 @@ const navSections: NavSection[] = [
     label: 'MARKETING',
     items: [
       { path: '/app/creative', label: 'Creative Lab', icon: Palette },
+      { path: '/app/landing-pages', label: 'Landing Pages', icon: FileText },
+      { path: '/app/video-images', label: 'Video & Images', icon: Wand2 },
     ],
   },
   {

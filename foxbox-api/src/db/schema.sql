@@ -426,6 +426,8 @@ CREATE TABLE IF NOT EXISTS confirmations (
     notes TEXT,
     status TEXT NOT NULL DEFAULT 'PENDING' CHECK(status IN ('CONFIRMED','PENDING','CANCELLED')),
     created_by TEXT NOT NULL,
+    confirmed_by TEXT,
+    confirmed_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at TEXT NOT NULL DEFAULT (datetime('now')),
     delivery_provider TEXT,
@@ -700,3 +702,67 @@ CREATE TABLE IF NOT EXISTS settings (
     value TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ============================================
+-- TEAM INVITATIONS
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS team_invitations (
+    id TEXT PRIMARY KEY,
+    email TEXT NOT NULL,
+    role TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    invited_by TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','revoked')),
+    expires_at TEXT NOT NULL,
+    accepted_at TEXT,
+    accepted_user_id TEXT,
+    revoked_at TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_team_invitations_email ON team_invitations(email);
+CREATE INDEX IF NOT EXISTS idx_team_invitations_status ON team_invitations(status);
+
+-- ============================================
+-- COMMISSIONS LEDGER (canonical, one row per confirmed confirmation)
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS commissions (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    confirmation_id TEXT NOT NULL UNIQUE,
+    order_id TEXT,
+    amount INTEGER NOT NULL,
+    currency TEXT NOT NULL DEFAULT 'DZD',
+    trigger TEXT NOT NULL DEFAULT 'CONFIRMED',
+    status TEXT NOT NULL DEFAULT 'earned',
+    earned_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_commissions_agent ON commissions(agent_id);
+
+-- ============================================
+-- DELIVERY INTEGRATIONS
+-- Tracks delivery company connections (no credentials stored here)
+-- ============================================
+
+CREATE TABLE IF NOT EXISTS delivery_integrations (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    account_name TEXT NOT NULL DEFAULT 'Default',
+    linked_store_id TEXT,
+    status TEXT NOT NULL DEFAULT 'disconnected' CHECK(status IN ('disconnected','connected','error','testing')),
+    error_message TEXT,
+    connected_at TEXT,
+    last_tested_at TEXT,
+    last_test_status TEXT,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_delivery_integrations_unique
+    ON delivery_integrations(provider_id, account_name, linked_store_id);

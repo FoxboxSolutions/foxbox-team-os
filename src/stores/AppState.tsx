@@ -42,11 +42,13 @@ interface AppState {
   // Admin auth management
   authUsers: AuthUser[]
   registrationRequests: RegistrationRequest[]
+  refreshAuthUsers: () => Promise<void>
   approveUser: (userId: string, role: AuthRole, approvedBy: string) => void
   rejectUser: (userId: string, reviewedBy: string, notes?: string) => void
   suspendUser: (userId: string) => void
   reactivateUser: (userId: string) => void
   updateUserRole: (userId: string, role: AuthRole, changedBy: string) => void
+  acceptInvitation: (token: string, fullName: string, password: string) => Promise<{ success: boolean; error?: string; redirect?: string }>
   // Profile management
   updateProfile: (data: { fullName?: string; avatar?: string | null }) => void
   changePassword: (currentPassword: string, newPassword: string) => Promise<{ success: boolean; error?: string }>
@@ -56,7 +58,7 @@ interface AppState {
   unblockUser: (userId: string) => void
   banUser: (userId: string) => void
   unbanUser: (userId: string) => void
-  deleteUser: (userId: string) => boolean
+  deleteUser: (userId: string) => Promise<boolean>
 
   // Products
   products: Product[]
@@ -545,7 +547,8 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
   }, [])
 
   const handleGoogleCallback = useCallback(async (token: string, userId: string, _status: string): Promise<{ success: boolean; redirect?: string; error?: string }> => {
-    // Store the JWT token from the Worker
+    // Store the JWT token from the Worker (standard key feeds all API calls)
+    setAuthToken(token)
     localStorage.setItem('foxbox_worker_token', token)
     localStorage.setItem('foxbox_worker_user_id', userId)
 
@@ -770,14 +773,34 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     refreshAuthUsers()
   }, [refreshAuthUsers])
 
-  const updateUserRole = useCallback((userId: string, role: AuthRole, _changedBy: string) => {
-    const user = db.getAuthUser(userId)
-    if (!user) return
-    user.role = role
-    user.updatedAt = new Date()
-    db.saveAuthUser(user)
-    refreshAuthUsers()
+  // Member management is server-backed (foxbox-api). Local db is only a cache.
+  const updateUserRole = useCallback(async (userId: string, role: AuthRole, _changedBy: string) => {
+    await api.updateUser(userId, { role })
+    await refreshAuthUsers()
   }, [refreshAuthUsers])
+
+  const acceptInvitation = useCallback(async (token: string, fullName: string, password: string): Promise<{ success: boolean; error?: string; redirect?: string }> => {
+    setAuthLoading(true)
+    setAuthError(null)
+    try {
+      const result = await api.acceptInvitation({ token, fullName, password })
+      setAuthToken(result.token)
+      const userData = await api.getMe()
+      db.saveAuthUser(userData)
+      db.setAuthSession({
+        userId: userData.id,
+        createdAt: new Date(),
+        expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      })
+      setAuthUser(userData)
+      await loadAllData()
+      setAuthLoading(false)
+      return { success: true, redirect: '/app' }
+    } catch (err) {
+      setAuthLoading(false)
+      return { success: false, error: err instanceof Error ? err.message : 'Could not accept the invitation. Please try again.' }
+    }
+  }, [loadAllData])
 
   // ─── Profile Management ──────────────────────────────────────
   const updateProfile = useCallback((data: { fullName?: string; avatar?: string | null }) => {
@@ -804,64 +827,45 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
     return { success: true }
   }, [authUser])
 
-  // ─── Admin User Management ──────────────────────────────────
-  const blockUser = useCallback((userId: string) => {
-    const user = db.getAuthUser(userId)
-    if (!user) return
-    user.status = 'blocked'
-    user.updatedAt = new Date()
-    db.saveAuthUser(user)
-    // Invalidate sessions for blocked user
+  // ─── Admin User Management (server-backed) ───────────────────
+  const blockUser = useCallback(async (userId: string) => {
+    await api.blockUser(userId)
+    // Backend invalidates the user's sessions; mirror locally if it's us
     if (authUser?.id === userId) {
       db.setAuthSession(null)
       setAuthUser(null)
     }
-    refreshAuthUsers()
+    await refreshAuthUsers()
   }, [authUser, refreshAuthUsers, setAuthUser])
 
-  const unblockUser = useCallback((userId: string) => {
-    const user = db.getAuthUser(userId)
-    if (!user) return
-    user.status = 'approved'
-    user.updatedAt = new Date()
-    db.saveAuthUser(user)
-    refreshAuthUsers()
+  const unblockUser = useCallback(async (userId: string) => {
+    await api.unblockUser(userId)
+    await refreshAuthUsers()
   }, [refreshAuthUsers])
 
-  const banUser = useCallback((userId: string) => {
-    const user = db.getAuthUser(userId)
-    if (!user) return
-    user.status = 'banned'
-    user.updatedAt = new Date()
-    db.saveAuthUser(user)
-    // Invalidate sessions for banned user
+  const banUser = useCallback(async (userId: string) => {
+    await api.banUser(userId)
     if (authUser?.id === userId) {
       db.setAuthSession(null)
       setAuthUser(null)
     }
-    refreshAuthUsers()
+    await refreshAuthUsers()
   }, [authUser, refreshAuthUsers, setAuthUser])
 
-  const unbanUser = useCallback((userId: string) => {
-    const user = db.getAuthUser(userId)
-    if (!user) return
-    user.status = 'approved'
-    user.updatedAt = new Date()
-    db.saveAuthUser(user)
-    refreshAuthUsers()
+  const unbanUser = useCallback(async (userId: string) => {
+    await api.unbanUser(userId)
+    await refreshAuthUsers()
   }, [refreshAuthUsers])
 
-  const deleteUser = useCallback((userId: string): boolean => {
-    const user = db.getAuthUser(userId)
-    if (!user) return false
-    // Prevent deleting the last administrator
-    if (user.role === 'administrator') {
-      const admins = db.getAuthUsers().filter(u => u.role === 'administrator' && u.status === 'approved' && u.id !== userId)
-      if (admins.length === 0) return false
+  const deleteUser = useCallback(async (userId: string): Promise<boolean> => {
+    try {
+      await api.deleteUser(userId)
+      await refreshAuthUsers()
+      return true
+    } catch {
+      // Backend refuses (e.g. last active administrator) — report failure
+      return false
     }
-    db.deleteAuthUser(userId)
-    refreshAuthUsers()
-    return true
   }, [refreshAuthUsers])
 
   // Products
@@ -1285,7 +1289,7 @@ export function AppStateProvider({ children }: { children: React.ReactNode }) {
       authUser, authLoading, authError, clearAuthError,
       login, register, loginWithGoogle, handleGoogleCallback, loginWithFacebook, logout,
       requestPasswordReset, resetPassword, setAuthToken,
-      authUsers, registrationRequests,
+      authUsers, registrationRequests, refreshAuthUsers, acceptInvitation,
       approveUser, rejectUser, suspendUser, reactivateUser, updateUserRole,
       updateProfile, changePassword, setAuthUser,
       blockUser, unblockUser, banUser, unbanUser, deleteUser,

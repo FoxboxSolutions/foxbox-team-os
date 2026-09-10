@@ -9,12 +9,15 @@ import type {
   EcomDelivery,
   YouCanOrder, YouCanOrdersKpis, Creative,
   ActivityLog,
+  LandingPage, LandingPageSection,
+  CreativeGeneration, CreativeAsset,
 } from '@/types';
 
 const API_BASE = import.meta.env.VITE_API_URL || 'https://foxbox-api.foxboxsolutions01.workers.dev/api';
 
 function getAuthHeaders(): HeadersInit {
-  const token = localStorage.getItem('foxbox_jwt_token');
+  // Fallback to the legacy Google-session key so existing Google logins keep working
+  const token = localStorage.getItem('foxbox_jwt_token') || localStorage.getItem('foxbox_worker_token');
   return {
     'Content-Type': 'application/json',
     ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -227,6 +230,96 @@ export const api = {
       headers: getAuthHeaders(),
     });
     return handleResponse(res);
+  },
+
+  // ─── TEAM INVITATIONS ──────────────────────────────────────
+  async createInvitation(data: { email: string; role: 'agent' | 'admin' }) {
+    const res = await fetch(`${API_BASE}/team/invitations`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ invitation: Record<string, unknown> & { inviteUrl?: string }; emailSent: boolean; emailError?: string }>(res);
+  },
+
+  async getInvitations() {
+    const res = await fetch(`${API_BASE}/team/invitations`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<Record<string, unknown>[]>(res);
+  },
+
+  async resendInvitation(id: string) {
+    const res = await fetch(`${API_BASE}/team/invitations/${id}/resend`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<{ invitation: Record<string, unknown> & { inviteUrl?: string }; emailSent: boolean; emailError?: string }>(res);
+  },
+
+  async revokeInvitation(id: string) {
+    const res = await fetch(`${API_BASE}/team/invitations/${id}/revoke`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async validateInvitation(token: string) {
+    const res = await fetch(`${API_BASE}/team/invitations/validate?token=${encodeURIComponent(token)}`);
+    return handleResponse<{ valid: boolean; reason?: string; email?: string; role?: string; roleLabel?: string; expiresAt?: string }>(res);
+  },
+
+  async acceptInvitation(data: { token: string; fullName: string; password: string }) {
+    const res = await fetch(`${API_BASE}/team/invitations/accept`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ token: string; user: { id: string; fullName: string; email: string; role: AuthRole; status: string } }>(res);
+  },
+
+  // ─── TEAM MEMBERS + COMMISSIONS ────────────────────────────
+  async getTeamMembers() {
+    const res = await fetch(`${API_BASE}/team/members`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<Record<string, unknown>[]>(res);
+  },
+
+  async getCommissionSummary() {
+    const res = await fetch(`${API_BASE}/team/commissions/summary`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<{ amountPerOrder: number; currency: string; agents: Record<string, unknown>[] }>(res);
+  },
+
+  async getCommissionLedger(params?: { agentId?: string; limit?: number; offset?: number }) {
+    const qs = new URLSearchParams();
+    if (params?.agentId) qs.set('agentId', params.agentId);
+    if (params?.limit) qs.set('limit', String(params.limit));
+    if (params?.offset) qs.set('offset', String(params.offset));
+    const query = qs.toString() ? `?${qs.toString()}` : '';
+    const res = await fetch(`${API_BASE}/team/commissions${query}`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<{ commissions: Record<string, unknown>[]; total: number }>(res);
+  },
+
+  async getCommissionConfig() {
+    const res = await fetch(`${API_BASE}/team/commissions/config`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<{ amountPerOrder: number; currency: string }>(res);
+  },
+
+  async saveCommissionConfig(amountPerOrder: number) {
+    const res = await fetch(`${API_BASE}/team/commissions/config`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ amountPerOrder }),
+    });
+    return handleResponse<{ amountPerOrder: number; currency: string }>(res);
   },
 
   // ─── DISCUSSIONS ───────────────────────────────────────────
@@ -918,6 +1011,177 @@ export const api = {
     });
     return handleResponse(res);
   },
+
+  // ─── MARKETING — LANDING PAGES ────────────────────────────────
+  async getLandingPages() {
+    const res = await fetch(`${API_BASE}/landing-pages`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<LandingPage[]>(res);
+  },
+
+  async getLandingPage(id: string) {
+    const res = await fetch(`${API_BASE}/landing-pages/${id}`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<LandingPage & { sections: LandingPageSection[] }>(res);
+  },
+
+  async createLandingPage(data: Partial<LandingPage>) {
+    const res = await fetch(`${API_BASE}/landing-pages`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<LandingPage & { sections: LandingPageSection[] }>(res);
+  },
+
+  async updateLandingPage(id: string, data: Partial<LandingPage>) {
+    const res = await fetch(`${API_BASE}/landing-pages/${id}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<LandingPage & { sections: LandingPageSection[] }>(res);
+  },
+
+  async deleteLandingPage(id: string) {
+    const res = await fetch(`${API_BASE}/landing-pages/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async reorderLandingPageSections(pageId: string, sectionIds: string[]) {
+    const res = await fetch(`${API_BASE}/landing-pages/${pageId}/sections/reorder`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ sectionIds }),
+    });
+    return handleResponse<LandingPageSection[]>(res);
+  },
+
+  async updateLandingPageSection(sectionId: string, data: Partial<LandingPageSection>) {
+    const res = await fetch(`${API_BASE}/landing-pages/sections/${sectionId}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<LandingPageSection>(res);
+  },
+
+  async generateLandingPageSection(sectionId: string, options?: { style?: string; language?: string; prompt?: string }) {
+    const res = await fetch(`${API_BASE}/landing-pages/sections/${sectionId}/generate`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(options || {}),
+    });
+    return handleResponse<LandingPageSection>(res);
+  },
+
+  async generateAllLandingPageSections(pageId: string, options?: { style?: string; language?: string }) {
+    const res = await fetch(`${API_BASE}/landing-pages/${pageId}/generate-all`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(options || {}),
+    });
+    return handleResponse<{ results: { sectionId: string; success: boolean }[] }>(res);
+  },
+
+  // ─── MARKETING — CREATIVE ASSETS ─────────────────────────────
+  async getCreativeAssets() {
+    const res = await fetch(`${API_BASE}/landing-pages/assets`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<CreativeAsset[]>(res);
+  },
+
+  async createCreativeAsset(data: Partial<CreativeAsset>) {
+    const res = await fetch(`${API_BASE}/landing-pages/assets`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ id: string }>(res);
+  },
+
+  async deleteCreativeAsset(id: string) {
+    const res = await fetch(`${API_BASE}/landing-pages/assets/${id}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    return handleResponse(res);
+  },
+
+  async generateCreative(options: { prompt: string; category?: string; style?: string; dimensions?: string; name?: string }) {
+    const res = await fetch(`${API_BASE}/creatives/generate`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(options),
+    });
+    return handleResponse<{ generationId: string; assetId: string; url: string }>(res);
+  },
+
+  async getCreativeGenerations() {
+    const res = await fetch(`${API_BASE}/creatives/generations`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<CreativeGeneration[]>(res);
+  },
+
+  // ─── Delivery Integrations ──────────────────────────────
+  async getDeliveryIntegrationProviders() {
+    const res = await fetch(`${API_BASE}/delivery-integrations/providers`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<Array<{
+      id: string; name: string; hasApi: boolean; envConfigured: boolean;
+      envKeyStatus: Record<string, boolean>;
+      integration: { id: string; accountName: string; linkedStoreId: string | null; status: string; errorMessage: string | null; connectedAt: string | null; lastTestedAt: string | null; lastTestStatus: string | null } | null;
+    }>>(res);
+  },
+
+  async connectDeliveryProvider(data: { providerId: string; accountName?: string; linkedStoreId?: string }) {
+    const res = await fetch(`${API_BASE}/delivery-integrations/connect`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ id: string; providerId: string; status: string; connectedAt: string }>(res);
+  },
+
+  async testDeliveryIntegration(providerId: string) {
+    const res = await fetch(`${API_BASE}/delivery-integrations/test/${providerId}`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<{ status: string; testedAt: string }>(res);
+  },
+
+  async updateDeliveryIntegration(id: string, data: { accountName?: string; linkedStoreId?: string }) {
+    const res = await fetch(`${API_BASE}/delivery-integrations/${id}`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(data),
+    });
+    return handleResponse<{ id: string; updated: boolean }>(res);
+  },
+
+  async disconnectDeliveryProvider(providerId: string) {
+    const res = await fetch(`${API_BASE}/delivery-integrations/${providerId}`, {
+      method: 'DELETE',
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<{ disconnected: boolean; providerId: string }>(res);
+  },
+
+  async getDeliveryCredentialsStatus(providerId: string) {
+    const res = await fetch(`${API_BASE}/delivery-integrations/${providerId}/credentials-status`, {
+      headers: getAuthHeaders(),
+    });
+    return handleResponse<{ providerId: string; credentials: Record<string, { envKey: string; configured: boolean }> }>(res);
+  },
 };
 
 // Ecom Delivery exports (wrappers for api object methods)
@@ -940,7 +1204,7 @@ export function setAuthToken(token: string | null) {
 }
 
 export function getAuthToken(): string | null {
-  return localStorage.getItem('foxbox_jwt_token');
+  return localStorage.getItem('foxbox_jwt_token') || localStorage.getItem('foxbox_worker_token');
 }
 
 export function clearAuthToken() {

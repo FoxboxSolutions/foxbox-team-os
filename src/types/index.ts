@@ -418,6 +418,55 @@ export interface VaultFile {
   source?: FileSource
 }
 
+// --- Team Invitations ---
+
+export type InvitationRole = 'agent' | 'admin'
+export type InvitationStatus = 'pending' | 'accepted' | 'expired' | 'revoked'
+
+export interface TeamInvitation {
+  id: string
+  email: string
+  role: AuthRole
+  roleLabel: string
+  invitedBy: string
+  status: InvitationStatus
+  expiresAt: string
+  acceptedAt?: string | null
+  revokedAt?: string | null
+  createdAt: string
+  inviteUrl?: string
+}
+
+// --- Commissions (canonical ledger: one row per confirmed confirmation) ---
+
+export interface CommissionEntry {
+  id: string
+  agentId: string
+  confirmationId: string
+  amount: number
+  currency: string
+  trigger: string
+  status: string
+  earnedAt: string
+  createdAt: string
+  agentName?: string
+  agentEmail?: string
+}
+
+export interface AgentCommissionSummary {
+  userId: string
+  fullName: string
+  email: string
+  role: AuthRole
+  confirmedCount: number
+  totalEarned: number
+}
+
+export interface TeamMemberWithStats extends AuthUser {
+  confirmedCount: number
+  totalEarned: number
+}
+
 // --- Creative Lab ---
 
 export type CreativePlatform = 'META' | 'TIKTOK' | 'OTHER'
@@ -805,12 +854,15 @@ export type ActivityAction =
   | 'YOUCAN_ORDER_IMPORTED'
   | 'YOUCAN_ORDER_STATUS_UPDATED'
   | 'YOUCAN_WEBHOOK_RECEIVED'
+  | 'DELIVERY_PROVIDER_CONNECTED'
+  | 'DELIVERY_PROVIDER_TESTED'
+  | 'DELIVERY_PROVIDER_DISCONNECTED'
 
 export interface ActivityLog {
   id: string
   action: ActivityAction
   userId: string
-  entityType: 'PRODUCT' | 'TASK' | 'ORDER' | 'CREATIVE' | 'FILE' | 'POST' | 'DISCUSSION' | 'CONFIRMATION' | 'SELLING_PRODUCT'
+  entityType: 'PRODUCT' | 'TASK' | 'ORDER' | 'CREATIVE' | 'FILE' | 'POST' | 'DISCUSSION' | 'CONFIRMATION' | 'SELLING_PRODUCT' | 'DELIVERY_INTEGRATION'
   entityId: string
   entityName: string
   details?: string
@@ -926,3 +978,133 @@ export interface YouCanOrdersKpis {
   cancelled: number
   totalRevenue: number
 }
+
+// ─── Marketing — Landing Pages ──────────────────────────────
+
+export type LandingPageLanguage = 'darija' | 'arabic' | 'french' | 'english'
+export type LandingPageVisualStyle = 'luxury' | 'premium' | 'minimal' | 'modern_tech' | 'clean' | 'dark_gold' | 'ugc' | 'cinematic' | 'medical' | 'custom'
+export type LandingPageStatus = 'draft' | 'generating' | 'ready' | 'published'
+export type LandingPagePaymentMethod = 'COD' | 'CCP' | 'BARIDIMOB' | 'multiple'
+
+export type LandingPageSectionType =
+  | 'hero' | 'trust_bar' | 'problem' | 'benefits' | 'how_it_works'
+  | 'social_proof' | 'offer' | 'faq' | 'final_cta' | 'footer'
+
+export type GenerationStatus = 'idle' | 'generating' | 'completed' | 'failed'
+
+export interface LandingPageSection {
+  id: string
+  pageId: string
+  sectionType: LandingPageSectionType
+  sortOrder: number
+  enabled: boolean
+  content: Record<string, unknown>
+  visualConfig: Record<string, unknown>
+  textLayers: TextLayer[]
+  generationStatus: GenerationStatus
+  assetUrl?: string
+  errorMessage?: string
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface TextLayer {
+  id: string
+  type: 'headline' | 'subheadline' | 'cta' | 'body' | 'price' | 'badge'
+  content: string
+  direction?: 'ltr' | 'rtl'
+  x?: number
+  y?: number
+  width?: number
+  height?: number
+  fontFamily?: string
+  fontSize?: number
+  fontWeight?: number
+  fontStyle?: 'normal' | 'italic'
+  color?: string
+  textAlign?: 'left' | 'center' | 'right'
+  lineHeight?: number
+  rotation?: number
+  opacity?: number
+}
+
+export interface LandingPage {
+  id: string
+  userId: string
+  name: string
+  productName?: string
+  productDescription?: string
+  productPrice?: string
+  promotionalPrice?: string
+  mainBenefits: string[]
+  productFeatures: string[]
+  targetAudience?: string
+  targetMarket: string
+  language: LandingPageLanguage
+  brandName?: string
+  brandColors: Record<string, string>
+  paymentMethod: LandingPagePaymentMethod
+  deliveryInfo?: string
+  guaranteeInfo?: string
+  marketingNotes?: string
+  productImageUrl?: string
+  additionalImages: string[]
+  visualStyle: LandingPageVisualStyle
+  customColors: Record<string, string>
+  status: LandingPageStatus
+  sections?: LandingPageSection[]
+  createdAt: Date
+  updatedAt: Date
+}
+
+// ─── Marketing — Creative Assets & Generation ───────────────
+
+export type CreativeGenerationType = 'landing_image' | 'creative_image' | 'creative_video'
+export type CreativeGenerationStatus = 'pending' | 'processing' | 'completed' | 'failed'
+
+export interface CreativeGeneration {
+  id: string
+  userId: string
+  pageId?: string
+  provider: string
+  model?: string
+  type: CreativeGenerationType
+  status: CreativeGenerationStatus
+  prompt?: string
+  error?: string
+  assetUrl?: string
+  metadata: Record<string, unknown>
+  createdAt: Date
+  completedAt?: Date
+}
+
+export type CreativeAssetProjectType = 'landing_page' | 'marketing_image' | 'marketing_video'
+
+export interface CreativeAsset {
+  id: string
+  userId: string
+  generationId?: string
+  projectType: CreativeAssetProjectType
+  projectId?: string
+  category?: string
+  name: string
+  url: string
+  thumbnailUrl?: string
+  width?: number
+  height?: number
+  fileSize?: number
+  provider?: string
+  model?: string
+  promptVersion?: string
+  language?: string
+  style?: string
+  metadata: Record<string, unknown>
+  createdAt: Date
+}
+
+export type CreativeImageCategory =
+  | 'product_showcase' | 'product_ad' | 'lifestyle' | 'ugc_style'
+  | 'before_after' | 'comparison' | 'offer_creative' | 'social_media'
+  | 'facebook_ad' | 'instagram_post' | 'story'
+
+export type CreativeImageFormat = '1080x1080' | '1080x1350' | '1080x1920' | '1200x628'
